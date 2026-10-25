@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>InstaFit</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1a1a1a;--mute:#6b6b6b;--line:#e2e0da;--acc:#e1306c;--accink:#fff;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121212;--card:#1d1d1d;--ink:#f2f2f2;--mute:#9a9a9a;--line:#333;--acc:#ff4d8d;--accink:#111}}
+:root[data-theme="dark"]{--bg:#121212;--card:#1d1d1d;--ink:#f2f2f2;--mute:#9a9a9a;--line:#333;--acc:#ff4d8d;--accink:#111}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:520px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:24px;margin:0 0 4px;letter-spacing:-.02em}
+p.sub{margin:0 0 18px;color:var(--mute);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.drop{display:block;text-align:center;padding:34px 12px;border:2px dashed var(--line);border-radius:16px;cursor:pointer;color:var(--mute);background:var(--card)}
+.drop b{color:var(--ink);display:block;margin-bottom:2px}
+.drop.over{border-color:var(--acc)}
+input[type=file]{display:none}
+.stage{display:flex;justify-content:center;background:var(--bg);border-radius:12px;padding:10px}
+.frame{background:#000;max-width:100%;max-height:60vh;width:100%;outline:1px solid var(--line)}
+.frame video{width:100%;height:100%;object-fit:contain;display:block}
+.label{font-size:13px;color:var(--mute);margin:0 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 14px;font:inherit;font-size:14px;cursor:pointer}
+.chip small{color:var(--mute);margin-left:4px}
+.chip[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:var(--accink)}
+.chip[aria-pressed=true] small{color:inherit;opacity:.8}
+.btn{width:100%;border:0;border-radius:12px;padding:14px;font:inherit;font-weight:600;background:var(--acc);color:var(--accink);cursor:pointer}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.alt{background:transparent;color:var(--ink);border:1px solid var(--line);margin-top:8px}
+.bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:12px;display:none}
+.bar i{display:block;height:100%;width:0;background:var(--acc)}
+.note{font-size:13px;color:var(--mute);margin:10px 0 0}
+.meta{font-size:13px;color:var(--mute);margin:10px 0 0;text-align:center}
+a.dl{display:block;text-align:center;text-decoration:none;margin-top:12px}
+[hidden]{display:none!important}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js"></script>
+</head>
+<body>
+<main>
+  <h1>InstaFit</h1>
+  <p class="sub">Add black bars so any video fits an Instagram ratio. Everything runs on your device.</p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="video/*">
+    <b>Choose a video</b>
+    <span>or drop one here</span>
+  </label>
+
+  <section id="work" hidden>
+    <div class="card">
+      <div class="stage"><div class="frame" id="frame"><video id="vid" playsinline controls></video></div></div>
+      <p class="meta" id="meta"></p>
+    </div>
+
+    <div class="card">
+      <p class="label">Instagram ratio</p>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <div class="card">
+      <button class="btn" id="go">Export video</button>
+      <div class="bar" id="bar"><i id="fill"></i></div>
+      <label class="note" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="fast" checked> Fast export (several times quicker than the clip, MP4)</label>
+      <p class="note" id="note">Keep this tab open while exporting. Untick fast export if the result looks off.</p>
+      <div id="result" hidden>
+        <a class="btn dl" id="dl">Download</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const RATIOS=[
+  {id:"4:5",w:4,h:5,tag:"Portrait"},
+  {id:"1:1",w:1,h:1,tag:"Square"},
+  {id:"9:16",w:9,h:16,tag:"Reels / Stories"},
+  {id:"3:4",w:3,h:4,tag:"Grid"},
+  {id:"1.91:1",w:1.91,h:1,tag:"Landscape"}
+];
+let ratio=RATIOS[0], file=null, url=null, actx=null, srcNode=null, dest=null, exporting=false;
+const $=id=>document.getElementById(id);
+const vid=$("vid"), frame=$("frame");
+
+// ratio chips
+const chips=$("chips");
+RATIOS.forEach(r=>{
+  const b=document.createElement("button");
+  b.className="chip"; b.innerHTML=r.id+"<small>"+r.tag+"</small>";
+  b.setAttribute("aria-pressed",r===ratio);
+  b.onclick=()=>{ if(exporting)return; ratio=r;
+    [...chips.children].forEach((c,i)=>c.setAttribute("aria-pressed",RATIOS[i]===r));
+    applyFrame(); $("result").hidden=true; };
+  chips.appendChild(b);
+});
+
+function applyFrame(){
+  frame.style.aspectRatio=ratio.w+" / "+ratio.h;
+  // width so tall ratios stay inside the viewport height
+  const maxH=window.innerHeight*0.6;
+  const w=Math.min(frame.parentElement.clientWidth-20, maxH*ratio.w/ratio.h);
+  frame.style.width=w+"px";
+}
+addEventListener("resize",applyFrame);
+
+// file loading
+$("file").onchange=e=>load(e.target.files[0]);
+const drop=$("drop");
+["dragover","dragenter"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("over")}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("over")}));
+drop.addEventListener("drop",e=>load(e.dataTransfer.files[0]));
+
+function load(f){
+  if(!f||!f.type.startsWith("video/"))return;
+  file=f; if(url)URL.revokeObjectURL(url);
+  url=URL.createObjectURL(f); vid.src=url;
+  $("work").hidden=false; $("result").hidden=true;
+  vid.onloadedmetadata=()=>{
+    $("meta").textContent=vid.videoWidth+" x "+vid.videoHeight+" source, "+f.name;
+    applyFrame();
+  };
+}
+
+// output size: smallest canvas of the target ratio that contains the video
+function outSize(){
+  const vw=vid.videoWidth, vh=vid.videoHeight, t=ratio.w/ratio.h;
+  let w,h;
+  if(vw/vh>t){ w=vw; h=vw/t; } else { h=vh; w=vh*t; }
+  const cap=1920, k=Math.min(1,cap/Math.max(w,h));
+  w*=k; h*=k;
+  return {w:Math.round(w/2)*2, h:Math.round(h/2)*2};
+}
+
+function pickMime(){
+  const c=["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
+  return c.find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m))||"";
+}
+
+async function fastExport(){
+  exporting=true; $("go").disabled=true; $("result").hidden=true;
+  $("bar").style.display="block"; $("fill").style.width="0";
+  $("note").textContent="Exporting fast... keep this tab open.";
+  const reset=()=>{ vid.playbackRate=1; vid.muted=false; vid.controls=true; vid.onended=null; exporting=false; $("go").disabled=false; $("bar").style.display="none"; };
+  try{
+    const {w,h}=outSize();
+    const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+    const ctx=cv.getContext("2d");
+    const s=Math.min(w/vid.videoWidth,h/vid.videoHeight);
+    const dw=vid.videoWidth*s, dh=vid.videoHeight*s, dx=(w-dw)/2, dy=(h-dh)/2;
+
+    // decode audio separately so the video can run faster than real time
+    let ab=null, ch=0, useAudio=false;
+    try{ const ac=new (window.AudioContext||window.webkitAudioContext)(); ab=await ac.decodeAudioData(await file.arrayBuffer()); ac.close(); }catch(e){}
+    const vcfg={codec:"avc1.640033",width:w,height:h,bitrate:8e6,framerate:30};
+    if(!(await VideoEncoder.isConfigSupported(vcfg)).supported) throw new Error("video config");
+    let acfg=null;
+    if(ab&&window.AudioEncoder){
+      ch=Math.min(2,ab.numberOfChannels);
+      acfg={codec:"mp4a.40.2",sampleRate:ab.sampleRate,numberOfChannels:ch,bitrate:128000};
+      try{ useAudio=(await AudioEncoder.isConfigSupported(acfg)).supported; }catch(e){}
+    }
+    const target=new Mp4Muxer.ArrayBufferTarget();
+    const muxer=new Mp4Muxer.Muxer({target,video:{codec:"avc",width:w,height:h},audio:useAudio?{codec:"aac",numberOfChannels:ch,sampleRate:ab.sampleRate}:undefined,fastStart:"in-memory"});
+    const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{throw e}});
+    venc.configure(vcfg);
+
+    vid.pause(); vid.controls=false; vid.muted=true;
+    await new Promise(r=>{ if(vid.currentTime===0)return r(); vid.onseeked=()=>r(); vid.currentTime=0; });
+    vid.playbackRate=4;
+    let n=0, last=-1;
+    await new Promise((res,rej)=>{
+      const onFrame=(now,meta)=>{
+        const ts=Math.round(meta.mediaTime*1e6);
+        if(ts>last){
+          last=ts;
+          ctx.fillStyle="#000"; ctx.fillRect(0,0,w,h); ctx.drawImage(vid,dx,dy,dw,dh);
+          const f=new VideoFrame(cv,{timestamp:ts});
+          venc.encode(f,{keyFrame:n++%60===0}); f.close();
+          $("fill").style.width=(90*meta.mediaTime/vid.duration)+"%";
+          if(venc.encodeQueueSize>10){ vid.pause(); venc.addEventListener("dequeue",()=>vid.play(),{once:true}); }
+        }
+        if(!vid.ended) vid.requestVideoFrameCallback(onFrame);
+      };
+      vid.requestVideoFrameCallback(onFrame);
+      vid.onended=res;
+      vid.play().catch(rej);
+    });
+    await venc.flush();
+
+    if(useAudio){
+      const aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{throw e}});
+      aenc.configure(acfg);
+      const N=4096;
+      for(let i=0;i<ab.length;i+=N){
+        const len=Math.min(N,ab.length-i), d=new Float32Array(len*ch);
+        for(let c=0;c<ch;c++) d.set(ab.getChannelData(c).subarray(i,i+len),c*len);
+        const ad=new AudioData({format:"f32-planar",sampleRate:ab.sampleRate,numberOfFrames:len,numberOfChannels:ch,timestamp:Math.round(i/ab.sampleRate*1e6),data:d});
+        aenc.encode(ad); ad.close();
+        if(aenc.encodeQueueSize>50) await new Promise(r=>setTimeout(r));
+      }
+      await aenc.flush();
+    }
+    muxer.finalize();
+    const blob=new Blob([target.buffer],{type:"video/mp4"});
+    const a=$("dl"); a.href=URL.createObjectURL(blob);
+    a.download=file.name.replace(/\.[^.]+$/,"")+"-"+ratio.id.replace(":","x")+".mp4";
+    a.textContent="Download MP4 ("+w+" x "+h+")";
+    $("result").hidden=false;
+    $("note").textContent=useAudio?"Done. Ready to upload.":"Done, but this video had no audio track I could read.";
+    reset(); vid.currentTime=0;
+    return true;
+  }catch(e){
+    console.warn("Fast export failed",e);
+    reset();
+    $("note").textContent="Fast export isn’t available here, using real-time export instead.";
+    return false;
+  }
+}
+
+$("go").onclick=async()=>{
+  if(exporting||!file)return;
+  if($("fast").checked&&window.VideoEncoder&&window.VideoFrame&&window.Mp4Muxer&&"requestVideoFrameCallback" in vid){
+    if(await fastExport())return;
+  }
+  if(!window.MediaRecorder){ $("note").textContent="Your browser can't record video. Try Chrome, Edge, Safari or Firefox."; return; }
+  exporting=true; $("go").disabled=true; $("result").hidden=true;
+  $("bar").style.display="block"; $("fill").style.width="0";
+  $("note").textContent="Exporting... keep this tab open.";
+
+  const {w,h}=outSize();
+  const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+  const ctx=cv.getContext("2d");
+  const s=Math.min(w/vid.videoWidth,h/vid.videoHeight);
+  const dw=vid.videoWidth*s, dh=vid.videoHeight*s, dx=(w-dw)/2, dy=(h-dh)/2;
+
+  vid.pause(); vid.controls=false;
+  await new Promise(r=>{ if(vid.currentTime===0)return r(); vid.onseeked=()=>r(); vid.currentTime=0; });
+
+  const stream=cv.captureStream(30);
+  try{
+    if(!actx){
+      actx=new (window.AudioContext||window.webkitAudioContext)();
+      srcNode=actx.createMediaElementSource(vid);
+      dest=actx.createMediaStreamDestination();
+    }
+    await actx.resume();
+    srcNode.disconnect(); srcNode.connect(dest);
+    dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+  }catch(e){ console.warn("No audio",e); }
+
+  const mime=pickMime();
+  const rec=new MediaRecorder(stream, mime?{mimeType:mime,videoBitsPerSecond:8e6}:{videoBitsPerSecond:8e6});
+  const chunks=[]; rec.ondataavailable=e=>{ if(e.data.size)chunks.push(e.data); };
+
+  let raf;
+  const draw=()=>{
+    ctx.fillStyle="#000"; ctx.fillRect(0,0,w,h);
+    ctx.drawImage(vid,dx,dy,dw,dh);
+    $("fill").style.width=(100*vid.currentTime/vid.duration)+"%";
+    raf=requestAnimationFrame(draw);
+  };
+
+  const done=new Promise(res=>{ rec.onstop=res; });
+  vid.onended=()=>{ cancelAnimationFrame(raf); setTimeout(()=>rec.stop(),150); };
+
+  rec.start(250); draw();
+  try{ await vid.play(); }catch(e){ rec.stop(); cancelAnimationFrame(raf); }
+  await done;
+
+  const type=(rec.mimeType||mime||"video/webm").split(";")[0];
+  const ext=type.includes("mp4")?"mp4":"webm";
+  const blob=new Blob(chunks,{type});
+  const out=URL.createObjectURL(blob);
+  const base=file.name.replace(/\.[^.]+$/,"");
+  const a=$("dl"); a.href=out; a.download=base+"-"+ratio.id.replace(":","x")+"."+ext;
+  a.textContent="Download "+ext.toUpperCase()+" ("+w+" x "+h+")";
+  $("result").hidden=false;
+  $("note").textContent=ext==="webm"?"Saved as WebM. If Instagram rejects it, convert to MP4 with any free converter.":"Done. Ready to upload.";
+
+  // restore normal playback
+  try{ srcNode.disconnect(); srcNode.connect(actx.destination); }catch(e){}
+  vid.controls=true; vid.currentTime=0;
+  exporting=false; $("go").disabled=false; $("bar").style.display="none";
+};
+</script>
+</body>
+</html>
